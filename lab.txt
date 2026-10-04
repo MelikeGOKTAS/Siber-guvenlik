@@ -1,0 +1,109 @@
+import os
+import time
+import hashlib
+from PIL import Image
+import matplotlib.pyplot as plt
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from argon2 import PasswordHasher
+
+print("--- MADDE 02: ECB ve CTR ile Görsel Şifreleme ---")
+
+img_size = (256, 256)
+image = Image.new('RGB', img_size, color='white')
+
+for x in range(64, 192):
+    for y in range(64, 192):
+        image.putpixel((x, y), (0, 0, 0))
+
+img_bytes = image.tobytes()
+key = os.urandom(16)
+
+# AES-ECB
+cipher_ecb = Cipher(algorithms.AES(key), modes.ECB())
+ecb_bytes = cipher_ecb.encryptor().update(img_bytes) + cipher_ecb.encryptor().finalize()
+img_ecb = Image.frombytes('RGB', img_size, ecb_bytes)
+
+# AES-CTR
+nonce = os.urandom(16)
+cipher_ctr = Cipher(algorithms.AES(key), modes.CTR(nonce))
+ctr_bytes = cipher_ctr.encryptor().update(img_bytes) + cipher_ctr.encryptor().finalize()
+img_ctr = Image.frombytes('RGB', img_size, ctr_bytes)
+
+fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+axes[0].imshow(image)
+axes[0].set_title("Orijinal Resim")
+axes[0].axis('off')
+
+axes[1].imshow(img_ecb)
+axes[1].set_title("AES-ECB (Desen Belli)")
+axes[1].axis('off')
+
+axes[2].imshow(img_ctr)
+axes[2].set_title("AES-CTR (Rastgele Gürültü)")
+axes[2].axis('off')
+
+plt.tight_layout()
+plt.savefig("sonuc.png")
+print("İşlem tamamlandı! Sonuç 'sonuc.png' adıyla kaydedildi.\n")
+
+print("--- MADDE 03: CTR'da Anahtarsız Mesaj Değiştirme ve AES-GCM ---")
+
+orijinal_mesaj = b"Tutar: 100 TL"
+nonce_ctr = os.urandom(16)
+
+cipher_ctr = Cipher(algorithms.AES(key), modes.CTR(nonce_ctr))
+sifreli_ctr = bytearray(cipher_ctr.encryptor().update(orijinal_mesaj))
+
+eski_metin = b"100"
+yeni_metin = b"900"
+baslangic_idx = orijinal_mesaj.find(eski_metin)
+
+for i in range(len(eski_metin)):
+    sifreli_ctr[baslangic_idx + i] ^= eski_metin[i] ^ yeni_metin[i]
+
+cozulmus_ctr = Cipher(algorithms.AES(key), modes.CTR(nonce_ctr)).decryptor().update(bytes(sifreli_ctr))
+
+print(f"CTR Orijinal Mesaj    : {orijinal_mesaj.decode()}")
+print(f"CTR Saldırı Sonrası   : {cozulmus_ctr.decode()}  <-- (Anahtarsız Değiştirildi!)")
+
+# AES-GCM İle Deneme
+aesgcm = AESGCM(key)
+nonce_gcm = os.urandom(12)
+sifreli_gcm = bytearray(aesgcm.encrypt(nonce_gcm, orijinal_mesaj, None))
+
+for i in range(len(eski_metin)):
+    sifreli_gcm[baslangic_idx + i] ^= eski_metin[i] ^ yeni_metin[i]
+
+try:
+    cozulmus_gcm = aesgcm.decrypt(nonce_gcm, bytes(sifreli_gcm), None)
+    print(f"GCM Çözülen Mesaj    : {cozulmus_gcm.decode()}")
+except Exception as e:
+    print("\nAES-GCM Sonucu       : [ENGELLENDİ!] Veri bütünlüğü bozulduğu için şifre çözülemedi.")
+    print(f"Hata Detayı          : {e}\n")
+
+
+print("--- MADDE 04: Çalışma Sürelerinin Karşılaştırılması ---")
+
+metin = b"GuvenliParola123!"
+
+# 1. SHA-256 Ölçümü (Çok hızlı olduğu için 10.000 kez çalıştırıp ortalama alıyoruz)
+tekrar = 10000
+start_sha = time.perf_counter()
+for _ in range(tekrar):
+    hashlib.sha256(metin).hexdigest()
+end_sha = time.perf_counter()
+sha_sure = (end_sha - start_sha) / tekrar
+
+# 2. Argon2id Ölçümü (Kasıtlı olarak ağır bir algoritmadır)
+ph = PasswordHasher()
+start_argon = time.perf_counter()
+ph.hash("GuvenliParola123!")
+end_argon = time.perf_counter()
+argon_sure = end_argon - start_argon
+
+print(f"1x SHA-256 Süresi   : {sha_sure:.8f} saniye")
+print(f"1x Argon2id Süresi  : {argon_sure:.8f} saniye")
+
+fark = int(argon_sure / sha_sure) if sha_sure > 0 else 0
+print(f"\nSonuç: Argon2id, SHA-256'dan yaklaşık {fark:,} kat daha YAVAŞ (güvenli) çalışmaktadır.")
